@@ -29,43 +29,165 @@ func init() {
 	httpcaddyfile.RegisterGlobalOption("swytch", parseGlobalOption)
 }
 
-// Config exposes the embedded Redis transport and effects runtime options.
-// The Redis command set is supplied directly by Swytch, without a proxy.
-// Configuration changes require a process restart; unchanged reloads retain
-// the engine, connections, ACL mutations, scripts, and subscriptions.
+// Config configures the Redis listener, authentication, TLS, memory use, and
+// optional Swytch peer replication or Cloud storage. Its fields are embedded
+// directly in the swytch app's JSON object.
 type Config struct {
-	Listen            string         `json:"listen,omitempty"`
-	UnixSocket        string         `json:"unix_socket,omitempty"`
-	UnixSocketMode    uint32         `json:"unix_socket_mode,omitempty"`
-	Password          string         `json:"password,omitempty"`
-	ACLFile           string         `json:"acl_file,omitempty"`
-	ReadTimeout       caddy.Duration `json:"read_timeout,omitempty"`
-	WriteTimeout      caddy.Duration `json:"write_timeout,omitempty"`
-	MaxConnections    int            `json:"max_connections,omitempty"`
-	DebugLogging      bool           `json:"debug_logging,omitempty"`
-	TCPKeepAlive      caddy.Duration `json:"tcp_keepalive,omitempty"`
-	ReadBufferSize    int            `json:"read_buffer_size,omitempty"`
-	WriteBufferSize   int            `json:"write_buffer_size,omitempty"`
-	NumAcceptors      int            `json:"num_acceptors,omitempty"`
-	TLSCertFile       string         `json:"tls_cert_file,omitempty"`
-	TLSKeyFile        string         `json:"tls_key_file,omitempty"`
-	TLSCAFile         string         `json:"tls_ca_file,omitempty"`
-	TLSMinVersion     string         `json:"tls_min_version,omitempty"`
-	MaxMemory         string         `json:"max_memory,omitempty"`
-	Compress          bool           `json:"compress,omitempty"`
-	ClusterPassphrase string         `json:"cluster_passphrase,omitempty"`
-	ConnectionSecret  string         `json:"connection_secret,omitempty"`
-	Join              string         `json:"join,omitempty"`
-	ClusterPort       int            `json:"cluster_port,omitempty"`
-	ClusterAdvertise  string         `json:"cluster_advertise,omitempty"`
+	// TCP address for Redis clients, in host:port form. The port must be
+	// between 1 and 65535. Defaults to "127.0.0.1:6379" when neither listen
+	// nor unix_socket is set. Mutually exclusive with unix_socket.
+	Listen string `json:"listen,omitempty"`
+
+	// Unix socket path for Redis clients, instead of a TCP listener. The path
+	// must not already exist at first start; remove stale sockets beforehand.
+	// Mutually exclusive with listen. Disabled by default.
+	UnixSocket string `json:"unix_socket,omitempty"`
+
+	// Permission bits for the Unix socket. Zero or omitted uses 0700.
+	// Use octal in the Caddyfile (0700) and a decimal JSON number (448).
+	// Only permission bits through 0777 (511 in JSON) are accepted.
+	UnixSocketMode uint32 `json:"unix_socket_mode,omitempty"`
+
+	// Password required by the default Redis user. Mutually exclusive with
+	// acl_file. When both are empty, clients can connect without authentication.
+	// Supports placeholders such as {env.REDIS_PASSWORD}.
+	Password string `json:"password,omitempty"`
+
+	// Path to an existing Redis ACL file defining users, passwords, and
+	// permissions. The file must load successfully during validation.
+	// Mutually exclusive with password. Empty disables ACL file loading.
+	ACLFile string `json:"acl_file,omitempty"`
+
+	// Timeout for reading Redis commands, for example "30s". Zero or omitted
+	// disables the read timeout. Must not be negative.
+	ReadTimeout caddy.Duration `json:"read_timeout,omitempty"`
+
+	// Timeout for writing Redis responses, for example "30s". Zero or omitted
+	// disables the write timeout. Must not be negative.
+	WriteTimeout caddy.Duration `json:"write_timeout,omitempty"`
+
+	// Maximum number of concurrent Redis client connections. Zero or omitted
+	// allows unlimited connections. Must not be negative.
+	MaxConnections int `json:"max_connections,omitempty"`
+
+	// Enable Swytch's debug-level Redis command logging. Defaults to false.
+	DebugLogging bool `json:"debug_logging,omitempty"`
+
+	// TCP keepalive period passed to Swytch, for example "30s". Zero or omitted
+	// leaves the listener's keepalive defaults unchanged. Must not be negative.
+	TCPKeepAlive caddy.Duration `json:"tcp_keepalive,omitempty"`
+
+	// Read buffer size per Redis client connection, in bytes. Zero or omitted
+	// uses Swytch's default. Must not be negative.
+	ReadBufferSize int `json:"read_buffer_size,omitempty"`
+
+	// Write buffer size per Redis client connection, in bytes. Zero or omitted
+	// uses Swytch's default. Must not be negative.
+	WriteBufferSize int `json:"write_buffer_size,omitempty"`
+
+	// Number of parallel TCP accept loops. Zero or omitted uses the CPU count
+	// on platforms supporting SO_REUSEPORT; other platforms use one acceptor.
+	// Does not apply to Unix sockets. Must not be negative.
+	NumAcceptors int `json:"num_acceptors,omitempty"`
+
+	// Path to a PEM server certificate enabling TLS for Redis clients.
+	// Requires tls_key_file. Empty disables TLS. Certificates are loaded from
+	// files; Caddy's automatic certificate issuance and renewal are not used.
+	TLSCertFile string `json:"tls_cert_file,omitempty"`
+
+	// Path to the PEM private key matching tls_cert_file. The certificate and
+	// key must be configured together and load successfully during validation.
+	TLSKeyFile string `json:"tls_key_file,omitempty"`
+
+	// Path to a PEM CA bundle used to require and verify Redis client
+	// certificates (mutual TLS). Requires tls_cert_file and tls_key_file.
+	// Empty disables client certificate authentication.
+	TLSCAFile string `json:"tls_ca_file,omitempty"`
+
+	// Minimum TLS version for Redis clients: "1.2" or "1.3". Defaults to "1.2".
+	// Only takes effect when tls_cert_file and tls_key_file enable TLS.
+	TLSMinVersion string `json:"tls_min_version,omitempty"`
+
+	// Swytch memory limit, as a byte count, a size such as "64mb" or "1gb",
+	// or a whole-number percentage such as "50%" (1 through 100).
+	// Size suffixes are case-insensitive and use powers of 1024.
+	// Defaults to "64mb". This configures Swytch, not a process-wide Caddy limit.
+	MaxMemory string `json:"max_memory,omitempty"`
+
+	// Store values compressed in Swytch's effects engine, decompressing them
+	// on read to trade CPU work for lower memory use. Defaults to false.
+	// Peers with different compression settings can interoperate.
+	Compress bool `json:"compress,omitempty"`
+
+	// Shared passphrase enabling peer replication and deriving the cluster's
+	// mutual TLS identity. Peers must use the same passphrase. Use join for DNS
+	// peer discovery. Mutually exclusive with connection_secret.
+	// Empty, with no connection_secret, selects standalone operation.
+	ClusterPassphrase string `json:"cluster_passphrase,omitempty"`
+
+	// Swytch Cloud connection secret providing cluster identity, membership,
+	// and durable storage across restarts and node loss with zero-knowledge
+	// encryption. Mutually exclusive with cluster_passphrase and join.
+	// Empty disables Cloud. Supports {env.SWYTCH_CONNECTION_SECRET}.
+	ConnectionSecret string `json:"connection_secret,omitempty"`
+
+	// DNS name to resolve for peer discovery using Swytch's discovery rules.
+	// Requires cluster_passphrase and is mutually exclusive with
+	// connection_secret. Empty disables DNS peer discovery.
+	Join string `json:"join,omitempty"`
+
+	// QUIC port for cluster traffic when peer replication or Cloud is enabled.
+	// Defaults to 7379, independently of the Redis client listen port.
+	// Must be between 1 and 65535.
+	ClusterPort int `json:"cluster_port,omitempty"`
+
+	// Cluster host:port advertised to peers, for example "10.0.0.5:7379".
+	// Empty lets Swytch detect the address automatically. Only used when
+	// peer replication or Cloud is enabled.
+	ClusterAdvertise string `json:"cluster_advertise,omitempty"`
 }
 
-// App is the singleton swytch Caddy application.
+// App runs Swytch's Redis-compatible server inside Caddy. Redis clients connect
+// directly to a TCP or Unix socket listener. Swytch supplies command execution,
+// transactions, scripting, JSON, streams, ACLs, and pub/sub; this app configures
+// the server and manages its lifecycle. Command compatibility follows the
+// Swytch release included in the build.
+//
+// Configure the module at apps.swytch in JSON, or with the swytch global option
+// outside HTTP site blocks in a Caddyfile:
+//
+//	{
+//		swytch {
+//			listen 127.0.0.1:6379
+//			password {env.REDIS_PASSWORD}
+//			max_memory 64mb
+//		}
+//	}
+//
+// Caddyfile option names match the JSON fields. Each option takes one value;
+// booleans use true or false, and durations accept strings such as "30s".
+// String fields support Caddy placeholders, including {env.NAME}, which are
+// expanded during provisioning.
+//
+// By default, Swytch runs as an in-memory standalone cache whose data is lost
+// on shutdown. Set cluster_passphrase and join for DNS-discovered peer
+// replication, or connection_secret for Swytch Cloud membership and durable,
+// zero-knowledge encrypted storage. Peer replication alone does not provide
+// Cloud's durability across restarts and node loss. Joining peers or Cloud can
+// delay Caddy startup.
+//
+// Only one Swytch server configuration is supported per Caddy process.
+// Unchanged reloads preserve data, client connections, runtime ACL changes,
+// scripts, and subscriptions. Changes to options or ACL/TLS file contents
+// require a process restart; reloads with such changes are rejected while the
+// existing server keeps running. Validation checks configuration and files
+// without opening listeners or contacting peers.
 type App struct {
 	Config
 	claimed bool
 }
 
+// CaddyModule returns the module information for the swytch app.
 func (App) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{ID: "swytch", New: func() caddy.Module { return new(App) }}
 }
@@ -305,7 +427,9 @@ func parseGlobalOption(d *caddyfile.Dispenser, existing any) (any, error) {
 	return httpcaddyfile.App{Name: "swytch", Value: caddyconfig.JSON(a, nil)}, nil
 }
 
-// UnmarshalCaddyfile parses a global swytch block. Names match the JSON fields.
+// UnmarshalCaddyfile parses the swytch global option. Subdirective names match
+// the JSON fields in Config, and each takes exactly one value. Duplicate
+// options and nested blocks are rejected. See App for a Caddyfile example.
 func (a *App) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	if !d.Next() {
 		return d.Err("expected swytch block")

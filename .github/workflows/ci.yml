@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOWORK: "off"
+  GOFLAGS: -mod=readonly
+
+jobs:
+  xcaddy:
+    name: Build Caddy with Swytch server
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # xcaddy creates a temporary module and resolves its dependencies.
+      GOFLAGS: -mod=mod
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
+      - name: Build pinned Caddy with this checkout
+        shell: bash
+        run: |
+          caddy_version=$(go list -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)
+          xcaddy build "$caddy_version" --with "github.com/swytchdb/caddy-server=${GITHUB_WORKSPACE}" --output "${RUNNER_TEMP}/caddy"
+      - name: Verify app module registration
+        shell: bash
+        run: |
+          "${RUNNER_TEMP}/caddy" version
+          "${RUNNER_TEMP}/caddy" list-modules | grep -Fx 'swytch'
+
+  checks:
+    name: Formatting, dependencies, and vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [[ -n "$unformatted" ]]; then
+            printf 'Run gofmt on these files:\n%s\n' "$unformatted"
+            exit 1
+          fi
+      - name: Check module tidiness
+        run: go mod tidy -diff
+      - name: Verify dependencies
+        run: go mod verify
+      - name: Vet
+        run: go vet ./...
+
+  build-test:
+    name: Build and race tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: go build ./...
+      - name: Test with race detection and coverage
+        run: go test -race -count=1 -timeout=5m -coverprofile=coverage.out ./...
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: error

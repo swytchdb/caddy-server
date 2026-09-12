@@ -136,6 +136,9 @@ func (c *wireClient) receive(t *testing.T, want string) {
 	for n := 0; n < len(got); {
 		count, err := c.reader.Read(got[n:])
 		n += count
+		if string(got[:n]) != want[:n] {
+			t.Fatalf("got response prefix %q, want %q", got[:n], want)
+		}
 		if err != nil {
 			t.Fatalf("read %q: %v", got[:n], err)
 		}
@@ -152,7 +155,10 @@ func (c *wireClient) command(t *testing.T, want string, args ...string) {
 
 func TestCaddyLifecycleAndRedis(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "redis.sock")
-	cfg := Config{UnixSocket: path, Password: "secret", MaxMemory: "16mb", NumAcceptors: 1}
+	// The engine's eviction governor measures the whole process's live heap,
+	// including Caddy and test overhead. Leave room so this lifecycle test
+	// checks reload retention without memory-pressure eviction removing keys.
+	cfg := Config{UnixSocket: path, Password: "secret", MaxMemory: "256mb", NumAcceptors: 1}
 	load := func(cfg Config) error {
 		raw, err := json.Marshal(map[string]any{"admin": map[string]any{"disabled": true}, "apps": map[string]any{"swytch": cfg}})
 		if err != nil {
@@ -193,6 +199,9 @@ func TestCaddyLifecycleAndRedis(t *testing.T) {
 	}
 	if runtimeState.server != original || runtimeState.refs != 1 {
 		t.Fatal("reload replaced runtime or leaked reference")
+	}
+	if evicted := original.Handler().GetCacheEvictions(); evicted != 0 {
+		t.Fatalf("lifecycle test hit memory pressure: %d keys evicted", evicted)
 	}
 	c.command(t, "$5\r\nvalue\r\n", "GET", "key")
 	c.command(t, ":1\r\n", "PUBLISH", "events", "hello")

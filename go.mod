@@ -1,4 +1,4 @@
-module github.com/swytchdb/caddy-server
+module github.com/swytchdb/caddy-swytch
 
 go 1.27.0
 

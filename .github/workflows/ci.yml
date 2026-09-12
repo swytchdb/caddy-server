@@ -37,7 +37,7 @@ jobs:
         shell: bash
         run: |
           caddy_version=$(go list -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)
-          xcaddy build "$caddy_version" --with "github.com/swytchdb/caddy-server=${GITHUB_WORKSPACE}" --output "${RUNNER_TEMP}/caddy"
+          xcaddy build "$caddy_version" --with "github.com/swytchdb/caddy-swytch=${GITHUB_WORKSPACE}" --output "${RUNNER_TEMP}/caddy"
       - name: Verify app module registration
         shell: bash
         run: |

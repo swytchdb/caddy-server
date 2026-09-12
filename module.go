@@ -1,8 +1,8 @@
 // Copyright 2026 Swytch Labs BV
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package caddyserver embeds Swytch's Redis server as a Caddy app.
-package caddyserver
+// Package caddyswytch embeds Swytch's Redis server as a Caddy app.
+package caddyswytch
 
 import (
 	"crypto/sha256"

@@ -1,4 +1,4 @@
-# Swytch Redis server for Caddy
+# caddy-swytch — Swytch Redis server for Caddy
 
 A Caddy app that embeds the full [Swytch](https://github.com/swytchdb/swytch)
 Redis server. Redis clients connect directly to its TCP or Unix socket listener.
@@ -12,13 +12,13 @@ Swytch release, not a claim that every upstream Redis command is supported.
 Requires Go 1.27 or later. From this checkout:
 
 ```sh
-xcaddy build --with github.com/swytchdb/caddy-server="$PWD"
+xcaddy build --with github.com/swytchdb/caddy-swytch="$PWD"
 ```
 
 Once published, omit the local replacement:
 
 ```sh
-xcaddy build --with github.com/swytchdb/caddy-server
+xcaddy build --with github.com/swytchdb/caddy-swytch
 ```
 
 The module depends on released Swytch v1.4.0 and Engine v1.0.1; sibling checkouts

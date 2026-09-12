@@ -1,7 +1,7 @@
 // Copyright 2026 Swytch Labs BV
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-package caddyserver
+package caddyswytch
 
 import (
 	"bufio"
